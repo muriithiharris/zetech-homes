@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Staff login - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<header class="site-header"><div class="container">
+  <a class="brand" href="../index.html">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>
+    Zetech Homes</a>
+  <nav class="site-nav"><a href="../index.html">Customer site</a></nav>
+</div></header>
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="panel">
+      <h1 style="font-size:1.7rem">Staff login</h1>
+      <p class="muted">For estate agents and system managers. Your role is set on your account.</p>
+      <div id="msg"></div>
+      <form id="login" novalidate>
+        <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required autofocus></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-block" id="go" type="submit">Log in to dashboard</button>
+      </form>
+      <p class="help" style="margin-top:1rem">Forgotten credentials? Contact the System Manager.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { sb, configBanner, rpc, notice, param, esc } from "../js/app.js";
+
+configBanner();
+const MAX_TRIES = 5, LOCK_MS = 15 * 60 * 1000;
+const KEY = "zh-login-fails";
+const store = {
+  get() { try { return JSON.parse(localStorage.getItem(KEY)) || { n: 0, t: 0 }; } catch { return { n: 0, t: 0 }; } },
+  set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch {} },
+  clear() { try { localStorage.removeItem(KEY); } catch {} },
+};
+
+if (param("msg")) notice("#msg", "info", esc(param("msg")));
+
+(async () => {
+  if (!sb) return;
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) location.href = "index.html";
+})();
+
+document.getElementById("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!sb) { notice("#msg", "error", "Supabase is not connected yet. Open web/config.js first."); return; }
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) { notice("#msg", "error", "Enter your email and password."); return; }
+
+  const fails = store.get();
+  if (fails.n >= MAX_TRIES && Date.now() - fails.t < LOCK_MS) {
+    notice("#msg", "error", "Too many failed attempts. Try again in 15 minutes or contact the System Manager.");
+    return;
+  }
+  const btn = document.getElementById("go"); btn.disabled = true;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) {
+    const now = Date.now();
+    store.set({ n: now - fails.t > LOCK_MS ? 1 : fails.n + 1, t: now });
+    notice("#msg", "error", "Wrong email or password.");
+    btn.disabled = false; return;
+  }
+  const r = await rpc("rpc_log_login");   // records IP + start time and writes the LOGIN audit entry
+  if (!r.ok) {
+    await sb.auth.signOut();
+    notice("#msg", "error", esc(r.message || "This account is not an active staff account."));
+    btn.disabled = false; return;
+  }
+  store.clear();
+  location.href = "index.html";
+});
+</script>
+</body>
+</html>

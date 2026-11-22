@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Property status - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<script type="module">
+import { sb, staffPage, staffMap, lookups, rpc, esc, kes, when, day, param, badge, propId, displayId, loading, notice, toast, ACTION_LABEL, STATUS_LABEL } from "../js/app.js";
+
+const main = document.getElementById("main");
+const id = Number(param("id"));
+const { me } = await staffPage({ active: "properties" });
+const LEGAL = { AVAILABLE: ["RESERVED"], RESERVED: ["AVAILABLE", "SOLD"], SOLD: [] };
+
+async function render(conflict = false) {
+  main.innerHTML = loading();
+  const { data: p } = await sb.from("properties").select("*").eq("id", id).maybeSingle();
+  if (!p) { main.innerHTML = '<div class="empty">Listing not found. <a href="properties.html">Back to properties</a></div>'; return; }
+  if (me.role !== "MANAGER" && p.agent_id !== me.id) { main.innerHTML = '<div class="empty">You can only manage your own listings. <a href="properties.html">Back to properties</a></div>'; return; }
+  const [staff, lk, resv] = await Promise.all([staffMap(), lookups(), rpc("rpc_reservation_details", { p_property_id: id })]);
+  const reservation = resv.ok ? resv.reservation : null;
+  const history = me.role === "MANAGER"
+    ? (await sb.from("audit_log").select("*").eq("target_lr", p.lr_number).order("id", { ascending: false }).limit(8)).data || [] : null;
+  const county = lk.counties.find((c) => c.id === p.county_id)?.name || "";
+  const next = LEGAL[p.status] || [];
+
+  main.innerHTML = `
+    <div class="main-head"><h1>Property status management</h1><a class="btn btn-ghost" href="properties.html">&larr; Back to properties</a></div>
+    ${conflict ? `<div class="notice changed"><strong>Concurrent update blocked.</strong> Another user changed this listing while you were working, so your change was <em>not</em> saved. The details below are the latest version (<span class="version-tag">v${p.version}</span>).</div>` : ""}
+    <div id="msg"></div>
+    <div class="two-col">
+      <div>
+        <div class="panel">
+          ${badge(p.status)}
+          <h2 style="margin-top:.6rem">${esc(p.title)}</h2>
+          <ul class="spec-list">
+            <li><span>Property ID</span>${propId(p.id)}</li>
+            <li><span>LR number</span><span class="mono" style="display:inline;color:inherit;text-transform:none;letter-spacing:0;font-size:inherit">${esc(p.lr_number)}</span></li>
+            <li><span>Price</span>${kes(p.price)}</li>
+            <li><span>County</span>${esc(county)}</li>
+            <li><span>Last updated by</span>${esc(p.updated_by ? displayId(staff[p.updated_by]) : "-")}</li>
+            <li><span>Timestamp</span>${esc(when(p.updated_at))}</li>
+            <li><span>Version tag (lock)</span><span class="version-tag" style="display:inline">v${p.version}</span></li>
+          </ul>
+          ${reservation ? `<div class="notice reserved" style="margin:0">Active reservation: <strong>${esc(reservation.client_name)}</strong> &middot; ${esc(reservation.client_phone)} &middot; fee ${kes(reservation.fee)} <span class="small">(since ${esc(day(reservation.created_at))})</span></div>` : ""}
+        </div>
+        ${history ? `<div class="panel"><h3>Recent changes to this listing</h3>
+          ${history.length ? `<ul class="timeline">${history.map((a) => `<li><span class="action-chip chip-${a.action}">${esc(ACTION_LABEL[a.action] || a.action)}</span>
+            ${a.old_value || a.new_value ? `<span class="muted">${esc((a.old_value || "").slice(0, 22))}${a.old_value ? " &rarr; " : ""}${esc((a.new_value || "").slice(0, 30))}</span>` : ""}
+            <br><span class="muted small">${esc(when(a.created_at))} &middot; ${esc(a.user_id ? displayId(staff[a.user_id]) : "system")}</span></li>`).join("")}</ul>` : '<p class="muted">No history yet.</p>'}</div>` : ""}
+      </div>
+
+      <form class="panel" id="status-form" novalidate>
+        <h2>Update status</h2>
+        <div class="status-options" role="radiogroup" aria-label="New status">
+          ${["AVAILABLE", "RESERVED", "SOLD"].map((s) => {
+            const enabled = next.includes(s), current = s === p.status;
+            return `<label class="status-option ${current ? "current" : ""} ${enabled ? "" : "disabled"}">
+              <input type="radio" name="new_status" value="${s}" ${enabled ? "" : "disabled"}>
+              ${badge(s)}
+              <span class="muted small">${current ? "current status" : enabled ? "" : "not allowed from " + STATUS_LABEL[p.status]}</span></label>`;
+          }).join("")}
+        </div>
+        ${p.status === "SOLD" ? '<div class="notice sold">Sold listings are final and cannot be changed.</div>' : ""}
+        <div id="reserve-fields" class="reserve-fields">
+          <h3>Reservation details</h3>
+          <div class="field"><label for="c-name">Client name</label><input id="c-name"><div class="err" data-for="c-name"></div></div>
+          <div class="field"><label for="c-phone">Client phone</label><input id="c-phone" inputmode="tel" placeholder="0712345678"><div class="err" data-for="c-phone"></div></div>
+          <div class="field"><label for="c-id">Client ID number</label><input id="c-id"><div class="err" data-for="c-id"></div></div>
+          <div class="field"><label for="c-fee">Reservation fee (KES)</label><input id="c-fee" type="number" min="0" step="1"><div class="err" data-for="c-fee"></div></div>
+          <p class="help">Phone and ID number are stored encrypted.</p>
+        </div>
+        <div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1rem">
+          <button class="btn" id="confirm" type="submit" ${next.length ? "" : "disabled"}>Confirm status update</button>
+          <a class="btn btn-ghost" href="properties.html">Cancel transaction</a>
+        </div>
+      </form>
+    </div>`;
+
+  const box = document.getElementById("reserve-fields");
+  document.querySelectorAll("input[name=new_status]").forEach((r) => r.addEventListener("change", () =>
+    box.classList.toggle("show", document.querySelector("input[name=new_status]:checked")?.value === "RESERVED")));
+
+  document.getElementById("status-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    document.querySelectorAll(".err").forEach((el) => (el.textContent = ""));
+    const choice = document.querySelector("input[name=new_status]:checked")?.value;
+    if (!choice) { notice("#msg", "error", "Choose the new status first."); return; }
+    const g = (k) => document.getElementById(k).value.trim();
+    let client = null, fee = null;
+    if (choice === "RESERVED") {
+      let bad = false;
+      const err = (k, t) => { document.querySelector(`.err[data-for="${k}"]`).textContent = t; bad = true; };
+      if (g("c-name").length < 2) err("c-name", "Required to reserve a property.");
+      if (!/^(\+254|0)[17][0-9]{8}$/.test(g("c-phone"))) err("c-phone", "Enter a valid Kenyan phone number, e.g. 0712345678.");
+      if (g("c-id").length < 5) err("c-id", "Required to reserve a property.");
+      if (g("c-fee") === "" || Number(g("c-fee")) < 0) err("c-fee", "Enter the reservation fee (0 if none).");
+      if (bad) return;
+      client = { name: g("c-name"), phone: g("c-phone"), id_number: g("c-id") };
+      fee = Number(g("c-fee"));
+    }
+    document.getElementById("confirm").disabled = true;
+    const r = await rpc("rpc_change_status", { p_id: id, p_version: p.version, p_new: choice, p_client: client, p_fee: fee });
+    if (r.ok) { toast("Status updated."); render(); }
+    else if (r.code === "conflict") render(true);
+    else { notice("#msg", "error", esc(r.message)); document.getElementById("confirm").disabled = false; }
+  });
+}
+render();
+</script>
+</body>
+</html>

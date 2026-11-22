@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Property form - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<script type="module">
+import { sb, staffPage, lookups, options, rpc, esc, param, imageUrl, loading, notice, toast, propId } from "../js/app.js";
+
+const main = document.getElementById("main");
+const editId = Number(param("id")) || null;
+const { me } = await staffPage({ active: editId ? "properties" : "add" });
+main.innerHTML = loading();
+
+const lk = await lookups();
+let prop = null;
+let images = [];
+if (editId) {
+  const { data } = await sb.from("properties").select("*").eq("id", editId).is("archived_at", null).maybeSingle();
+  prop = data;
+  if (!prop) { main.innerHTML = '<div class="empty">Listing not found or already archived. <a href="properties.html">Back to properties</a></div>'; throw new Error("not found"); }
+  if (me.role !== "MANAGER" && prop.agent_id !== me.id) { main.innerHTML = '<div class="empty">You can only edit your own listings. <a href="properties.html">Back to properties</a></div>'; throw new Error("forbidden"); }
+  images = (await sb.from("property_images").select("*").eq("property_id", editId).order("is_primary", { ascending: false })).data || [];
+}
+const v = (k, d = "") => (prop ? prop[k] ?? d : d);
+
+main.innerHTML = `
+  <div class="main-head">
+    <h1>${editId ? "Edit " + esc(prop.lr_number) : "New property entry"}</h1>
+    <a class="btn btn-ghost" href="properties.html">Cancel</a>
+  </div>
+  <div id="banner"></div>
+  <form class="panel" id="form" novalidate>
+    <div class="form-grid">
+      <div class="field"><label for="lr">Land Reference (LR) No.</label>
+        <input id="lr" value="${esc(v("lr_number"))}" placeholder="LR/2026/00148" autocomplete="off" ${editId ? "disabled" : ""}>
+        <p class="help" id="lr-hint">${editId ? "The LR number cannot be changed." : "Format LR/2026/00148. Must be unique."}</p><div class="err" data-for="lr"></div></div>
+      <div class="field"><label for="type">Category / type</label><select id="type">${options(lk.types, v("property_type_id"), "Select a type")}</select><div class="err" data-for="type"></div></div>
+      <div class="field span-2"><label for="title">Property title</label><input id="title" maxlength="150" value="${esc(v("title"))}" placeholder="Executive 3-Bed Villa in Kileleshwa"><div class="err" data-for="title"></div></div>
+      <div class="field"><label for="price">Listing price (KES)</label><input id="price" type="number" min="1" step="1" value="${esc(v("price") ? Number(v("price")) : "")}"><div class="err" data-for="price"></div></div>
+      <div class="field"><label for="location">Physical location</label><input id="location" value="${esc(v("location"))}" placeholder="Mandera Road, Plot 14B"><div class="err" data-for="location"></div></div>
+      <div class="field"><label for="county">County</label><select id="county">${options(lk.counties, v("county_id"), "Select a county")}</select><div class="err" data-for="county"></div></div>
+      <div class="field"><label for="sub">Sub-county</label><select id="sub"></select><div class="err" data-for="sub"></div></div>
+      <div class="field"><label for="beds">Bedrooms</label><input id="beds" type="number" min="0" max="50" value="${esc(v("bedrooms", 0))}"></div>
+      <div class="field"><label for="baths">Bathrooms</label><input id="baths" type="number" min="0" max="50" value="${esc(v("bathrooms", 0))}"></div>
+      <div class="field span-2"><label for="desc">Property description</label><textarea id="desc" rows="4">${esc(v("description"))}</textarea></div>
+      <div class="field span-2"><label for="photos">Photos</label>
+        ${images.length ? `<div class="photo-row">${images.map((i) => `<img src="${esc(imageUrl(i.path))}" alt="Existing photo">`).join("")}</div>` : ""}
+        <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+        <p class="help">JPG, PNG or WebP, up to 5 MB each. The first photo becomes the cover.</p><div class="err" data-for="photos"></div></div>
+    </div>
+    ${editId
+      ? `<p class="muted small">Version tag: <span class="version-tag">v${prop.version}</span> &mdash; saved only if nobody else has changed this listing since you opened it.</p>`
+      : `<p class="muted small">Listing agent: <strong>${esc(me.full_name)}</strong>, filled in automatically.</p>`}
+    <div style="display:flex;gap:.7rem;flex-wrap:wrap">
+      <button class="btn" id="save" type="submit">${editId ? "Save changes" : "Submit listing"}</button>
+      <a class="btn btn-ghost" href="properties.html">Cancel</a>
+    </div>
+  </form>`;
+
+const $ = (id) => document.getElementById(id);
+const LR_RE = /^LR\/[0-9]{4}\/[0-9]{3,6}$/;
+
+/* sub-county list follows the county */
+function fillSubs() {
+  const cid = $("county").value;
+  const keep = $("sub").value || (prop ? String(prop.sub_county_id) : "");
+  $("sub").innerHTML = options(lk.subCounties.filter((s) => String(s.county_id) === cid), keep, "Select a sub-county");
+}
+$("county").addEventListener("change", () => { $("sub").value = ""; fillSubs(); });
+fillSubs();
+
+/* live duplicate check while typing */
+if (!editId) {
+  let timer;
+  $("lr").addEventListener("input", () => {
+    clearTimeout(timer);
+    const hint = $("lr-hint"); const raw = $("lr").value.trim();
+    if (!raw) { hint.textContent = "Format LR/2026/00148. Must be unique."; hint.className = "help"; return; }
+    timer = setTimeout(async () => {
+      const r = await rpc("rpc_check_lr", { p_lr: raw });
+      if (!r.ok) return;
+      if (!r.valid) { hint.className = "help field-hint-warn"; hint.textContent = "Format should be LR/2026/00148."; }
+      else if (r.exists) { hint.className = "help field-hint-bad"; hint.textContent = `${r.lr} already exists. Submitting will be blocked and logged.`; }
+      else { hint.className = "help field-hint-ok"; hint.textContent = `${r.lr} is available.`; }
+    }, 350);
+  });
+}
+
+function showErr(key, text) { const el = document.querySelector(`.err[data-for="${key}"]`); if (el) el.textContent = text; return true; }
+
+async function uploadPhotos(id, files) {
+  let failed = 0;
+  for (const file of files) {
+    const path = `${id}/${Date.now()}-${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    const up = await sb.storage.from("property-images").upload(path, file, { contentType: file.type, upsert: false });
+    if (up.error) { failed++; continue; }
+    const r = await rpc("rpc_add_property_image", { p_property_id: id, p_path: path });
+    if (!r.ok) failed++;
+  }
+  return failed;
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  document.querySelectorAll(".err").forEach((el) => (el.textContent = ""));
+  $("banner").innerHTML = "";
+  const lr = $("lr").value.replace(/\s+/g, "").toUpperCase();
+  const files = [...$("photos").files];
+  let bad = false;
+  if (!editId && !LR_RE.test(lr)) bad = showErr("lr", "LR number must look like LR/2026/00148.");
+  if (!$("type").value) bad = showErr("type", "Choose a property type.");
+  if ($("title").value.trim().length < 3) bad = showErr("title", "Enter a title (at least 3 characters).");
+  if (!(Number($("price").value) > 0)) bad = showErr("price", "Price must be greater than zero.");
+  if (!$("location").value.trim()) bad = showErr("location", "Enter the physical location.");
+  if (!$("county").value) bad = showErr("county", "Choose a county.");
+  if (!$("sub").value) bad = showErr("sub", "Choose a sub-county.");
+  for (const f of files) {
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) bad = showErr("photos", `${f.name} is not a JPG, PNG or WebP image.`);
+    else if (f.size > 5 * 1024 * 1024) bad = showErr("photos", `${f.name} is larger than 5 MB.`);
+  }
+  if (bad) return;
+
+  const body = {
+    title: $("title").value.trim(), property_type_id: Number($("type").value), price: Number($("price").value),
+    county_id: Number($("county").value), sub_county_id: Number($("sub").value), location: $("location").value.trim(),
+    description: $("desc").value.trim(), bedrooms: Number($("beds").value || 0), bathrooms: Number($("baths").value || 0),
+  };
+  const btn = $("save"); btn.disabled = true;
+  const r = editId
+    ? await rpc("rpc_update_property", { p_id: editId, p_version: prop.version, p: body })
+    : await rpc("rpc_create_property", { p: { lr_number: lr, ...body } });
+  if (!r.ok) {
+    btn.disabled = false;
+    if (r.code === "conflict") {
+      notice("#banner", "warning", `<strong>Nothing was saved.</strong> Another user changed this listing while you were editing. <a href="property-form.html?id=${editId}">Refresh to load the latest version</a> and re-apply your change.`);
+    } else if (r.code === "duplicate" || r.code === "invalid_lr") {
+      showErr("lr", r.message);
+    } else {
+      notice("#banner", "error", esc(r.message));
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  const id = editId || r.id;
+  if (files.length) {
+    const failed = await uploadPhotos(id, files);
+    if (failed) toast(`${failed} photo(s) could not be uploaded. Edit the listing to try again.`, "error");
+  }
+  toast(editId ? "Listing updated." : `Listing ${r.lr_number} created.`);
+  setTimeout(() => (location.href = "properties.html"), 600);
+});
+</script>
+</body>
+</html>

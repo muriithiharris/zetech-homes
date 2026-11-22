@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<script type="module">
+import { sb, staffPage, rpc, esc, num, loading, when, displayId, ACTION_LABEL, notice } from "../js/app.js";
+
+const main = document.getElementById("main");
+const { me } = await staffPage({ active: "dashboard" });
+main.innerHTML = loading("Loading your dashboard...");
+
+const head = `
+  <div class="main-head">
+    <div><h1>${me.role === "MANAGER" ? "Executive dashboard" : "My dashboard"}</h1>
+      <p class="muted" style="margin:0">Welcome, ${esc(me.full_name)}.</p></div>
+    <a class="btn btn-accent" href="property-form.html">+ Add property</a>
+  </div>`;
+
+/* ---- my own listings (every staff member) ---- */
+const { data: mine } = await sb.from("properties").select("status").eq("agent_id", me.id).is("archived_at", null);
+const count = (s) => (mine || []).filter((p) => p.status === s).length;
+const { count: myOpen } = await sb.from("viewing_requests").select("id", { count: "exact", head: true }).eq("handled", false);
+
+const { data: notes } = await sb.from("notifications").select("*").order("created_at", { ascending: false }).limit(5);
+const notesHtml = (notes || []).length
+  ? `<ul class="check-list">${notes.map((n) => `<li class="${n.is_read ? "" : "unread"}"><span>${n.link ? `<a href="${esc(n.link)}">${esc(n.message)}</a>` : esc(n.message)}</span><span class="muted small" style="white-space:nowrap">${esc(when(n.created_at))}</span></li>`).join("")}</ul><a class="small" href="notifications.html">All notifications</a>`
+  : '<p class="muted">You are all caught up.</p>';
+
+let managerHtml = "";
+if (me.role === "MANAGER") {
+  const s = await rpc("rpc_dashboard_stats");
+  if (!s.ok) {
+    managerHtml = `<div class="messages"><li class="error">${esc(s.message)}</li></div>`;
+  } else {
+    const pct = (n) => (s.total ? Math.round((n * 100) / s.total) : 0);
+    const issueTotal = (s.issues || []).reduce((a, i) => a + Number(i.count), 0);
+    const healthy = issueTotal === 0 && s.triggers_found === s.triggers_expected;
+    managerHtml = `
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Active listings</div><div class="value">${num(s.available)}</div><div class="sub">available to customers</div></div>
+      <div class="stat"><div class="label">Reserved / sold</div><div class="value">${num(s.reserved + s.sold)}</div><div class="sub">${num(s.reserved)} reserved &middot; ${num(s.sold)} sold</div></div>
+      <div class="stat ${healthy ? "ok" : ""}"><div class="label">System health</div>
+        <div class="value" style="${healthy ? "" : "color:var(--sold)"}">${healthy ? "100% consistent" : issueTotal + " issue" + (issueTotal === 1 ? "" : "s")}</div>
+        <div class="sub">${s.triggers_found} of ${s.triggers_expected} database triggers active</div></div>
+      <div class="stat"><div class="label">Open viewing requests</div><div class="value">${num(s.open_requests)}</div><div class="sub"><a href="viewing.html">Review requests</a></div></div>
+    </div>
+    <div class="two-col">
+      <div class="panel">
+        <h2>Real-time inventory distribution</h2>
+        ${[["Available", s.available, "b-available"], ["Reserved", s.reserved, "b-reserved"], ["Sold", s.sold, "b-sold"]].map(([l, n, c]) =>
+          `<div class="bar-row"><div class="bar-label"><span>${l}</span><span>${pct(n)}% (${num(n)})</span></div><div class="bar"><span class="${c}" style="width:${pct(n)}%"></span></div></div>`).join("")}
+        <p class="muted small" style="margin:0">Based on ${num(s.total)} live (non-archived) listings.</p>
+      </div>
+      <div class="panel">
+        <h2>System integrity metrics</h2>
+        <ul class="check-list">
+          <li><span>Blocked duplicates today</span><strong>${num(s.duplicates_today)}</strong></li>
+          <li><span>Concurrent-update conflicts handled today</span><strong>${num(s.conflicts_today)}</strong></li>
+          ${(s.issues || []).map((i) => `<li><span>${esc(i.label)}</span><span class="${Number(i.count) ? "pill-bad" : "pill-ok"}" style="${Number(i.count) ? "color:var(--sold);font-weight:700" : "font-weight:700"}">${Number(i.count) ? i.count : "None"}</span></li>`).join("")}
+        </ul>
+        <p class="small" style="margin:.8rem 0 0"><a href="audit.html">Open the audit log</a> &middot; <a href="reports.html">Reports</a></p>
+      </div>
+    </div>
+    <h2 style="margin-top:1.6rem">Agent activity</h2>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>Staff</th><th>Listings</th><th>Available</th><th>Reserved</th><th>Sold</th><th>Actions (7 days)</th></tr></thead>
+      <tbody>${(s.agents || []).map((a) => `<tr><td>${esc(a.full_name)} <span class="muted small">${esc(displayId(a))}</span></td><td>${a.listings}</td><td>${a.available}</td><td>${a.reserved}</td><td>${a.sold}</td><td>${a.actions_week}</td></tr>`).join("")}</tbody>
+    </table></div>`;
+  }
+} else {
+  managerHtml = `
+    <div class="stat-grid">
+      <div class="stat"><div class="label">My listings</div><div class="value">${num((mine || []).length)}</div></div>
+      <div class="stat"><div class="label">Available</div><div class="value">${count("AVAILABLE")}</div></div>
+      <div class="stat"><div class="label">Reserved</div><div class="value">${count("RESERVED")}</div></div>
+      <div class="stat"><div class="label">Sold</div><div class="value">${count("SOLD")}</div></div>
+      <div class="stat"><div class="label">Open viewing requests</div><div class="value">${num(myOpen || 0)}</div><div class="sub"><a href="viewing.html">Review requests</a></div></div>
+    </div>`;
+}
+
+main.innerHTML = head + managerHtml + `
+  <div class="panel" style="margin-top:1.4rem"><h2>Notifications</h2>${notesHtml}</div>`;
+</script>
+</body>
+</html>

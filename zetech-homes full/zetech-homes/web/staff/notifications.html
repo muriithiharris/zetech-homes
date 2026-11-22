@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Notifications</h1><button class="btn btn-ghost" id="read" type="button">Mark all as read</button></div>
+    <div class="panel" id="list"></div>
+  </main>
+</div>
+<script type="module">
+import { sb, staffPage, rpc, esc, when, loading, toast } from "../js/app.js";
+const $ = (id) => document.getElementById(id);
+await staffPage({ active: "notifications" });
+async function load() {
+  $("list").innerHTML = loading();
+  const { data, error } = await sb.from("notifications").select("*").order("created_at", { ascending: false }).limit(100);
+  if (error) { $("list").innerHTML = esc(error.message); return; }
+  $("list").innerHTML = data.length
+    ? `<ul class="check-list">${data.map((n) => `<li class="${n.is_read ? "" : "unread"}"><span>${n.link ? `<a href="${esc(n.link)}">${esc(n.message)}</a>` : esc(n.message)}</span><span class="muted small" style="white-space:nowrap">${esc(when(n.created_at))}</span></li>`).join("")}</ul>`
+    : '<p class="muted">You are all caught up.</p>';
+}
+$("read").addEventListener("click", async () => { await rpc("rpc_mark_notifications_read"); toast("Marked as read."); load(); });
+load();
+</script>
+</body>
+</html>

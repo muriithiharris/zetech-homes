@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Reports</h1></div>
+    <form class="filter-bar" id="filters">
+      <div><label for="report">Report</label><select id="report">
+        <option value="inventory">Inventory by status</option>
+        <option value="agents">Agent performance</option>
+        <option value="reservations">Reservations</option>
+        <option value="integrity">Data integrity (blocked duplicates and conflicts)</option></select></div>
+      <div><label for="from">From</label><input id="from" type="date"></div>
+      <div><label for="to">To</label><input id="to" type="date"></div>
+      <div><button class="btn" type="submit" style="width:100%">Generate</button></div>
+    </form>
+    <div id="out"></div>
+    <div id="actions" class="hidden" style="display:flex;gap:.5rem;margin-top:1rem"><button class="btn btn-ghost" id="csv" type="button">Download CSV</button><button class="btn btn-ghost" id="pdf" type="button">Download PDF</button></div>
+  </main>
+</div>
+<script type="module">
+import { sb, staffPage, staffMap, rpc, esc, kes, when, day, loading, csvDownload, pdfDownload, ACTION_LABEL, STATUS_LABEL, lookups } from "../js/app.js";
+const $ = (id) => document.getElementById(id);
+const { me } = await staffPage({ active: "reports", manager: true });
+if (me.role !== "MANAGER") { $("main").innerHTML = '<div class="empty">Managers only.</div>'; throw new Error("forbidden"); }
+let current = null;
+const range = (q, col) => {
+  if ($("from").value) q = q.gte(col, $("from").value);
+  if ($("to").value) q = q.lt(col, new Date(new Date($("to").value).getTime() + 864e5).toISOString().slice(0, 10));
+  return q;
+};
+async function build(kind) {
+  if (kind === "inventory") {
+    const lk = await lookups(); const staff = await staffMap();
+    const { data } = await range(sb.from("properties").select("*").is("archived_at", null).order("id"), "created_at");
+    const cn = Object.fromEntries(lk.counties.map((c) => [c.id, c.name]));
+    return { title: "Inventory by status", headers: ["LR", "Title", "County", "Price (KES)", "Status", "Agent", "Listed"],
+      rows: (data || []).map((p) => [p.lr_number, p.title, cn[p.county_id] || "", Number(p.price), STATUS_LABEL[p.status] || p.status, staff[p.agent_id]?.full_name || "", day(p.created_at)]) };
+  }
+  if (kind === "agents") {
+    const r = await rpc("rpc_report_agent_performance", { p_from: $("from").value || null, p_to: $("to").value || null });
+    if (!r.ok) throw new Error(r.message);
+    return { title: "Agent performance", headers: ["Staff no.", "Name", "Listings", "Available", "Reserved", "Sold", "Reservations", "Fees (KES)", "Audit actions"],
+      rows: (r.rows || []).map((a) => [a.staff_no, a.full_name, a.listings, a.available, a.reserved, a.sold, a.reservations_made, Number(a.reservation_fees), a.audit_actions]) };
+  }
+  if (kind === "reservations") {
+    const staff = await staffMap();
+    const { data } = await range(sb.from("reservations").select("*").order("id", { ascending: false }), "created_at");
+    const ids = [...new Set((data || []).map((x) => x.property_id))];
+    const { data: props } = ids.length ? await sb.from("properties").select("id,lr_number").in("id", ids) : { data: [] };
+    const pm = Object.fromEntries((props || []).map((p) => [p.id, p.lr_number]));
+    return { title: "Reservations", headers: ["Date", "LR", "Fee (KES)", "Status", "Made by"],
+      rows: (data || []).map((x) => [day(x.created_at), pm[x.property_id] || x.property_id, Number(x.fee), x.status, staff[x.created_by || x.staff_id]?.full_name || ""]) };
+  }
+  const { data } = await range(sb.from("audit_log").select("*").in("action", ["DUPLICATE_BLOCKED", "MVCC_CONFLICT"]).order("id", { ascending: false }).limit(2000), "created_at");
+  return { title: "Data integrity events", headers: ["Time", "Event", "LR", "Detail"],
+    rows: (data || []).map((a) => [when(a.created_at), ACTION_LABEL[a.action] || a.action, a.target_lr || "", a.new_value || a.old_value || ""]) };
+}
+$("filters").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("out").innerHTML = loading(); $("actions").classList.add("hidden");
+  try {
+    current = await build($("report").value);
+    $("out").innerHTML = `<h2>${esc(current.title)}</h2>` + (current.rows.length
+      ? `<div class="table-wrap"><table class="data"><thead><tr>${current.headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${current.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div><p class="muted small">${current.rows.length} rows</p>`
+      : '<div class="empty">No data for this selection.</div>');
+    if (current.rows.length) $("actions").classList.remove("hidden");
+  } catch (err) { $("out").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+});
+const fname = () => `${$("report").value}-${new Date().toISOString().slice(0, 10)}`;
+$("csv").onclick = () => current && csvDownload(fname() + ".csv", current.headers, current.rows);
+$("pdf").onclick = () => current && pdfDownload(fname() + ".pdf", "Zetech Homes - " + current.title, current.headers, current.rows);
+$("filters").requestSubmit();
+</script>
+</body>
+</html>

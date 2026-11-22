@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Staff accounts - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Staff accounts</h1></div>
+    <div class="notice reserved">New accounts are created in the Supabase dashboard (Authentication &rarr; Users &rarr; Add user). They appear here as active Agents; promote or deactivate them below.</div>
+    <div id="msg"></div><div id="list"></div>
+  </main>
+</div>
+<script type="module">
+import { sb, staffPage, rpc, esc, when, loading, notice, toast, displayId } from "../js/app.js";
+const $ = (id) => document.getElementById(id);
+const { me } = await staffPage({ active: "users", manager: true });
+if (me.role !== "MANAGER") { $("main").innerHTML = '<div class="empty">Managers only.</div>'; throw new Error("forbidden"); }
+async function load() {
+  $("list").innerHTML = loading();
+  const { data, error } = await sb.from("staff").select("*").order("staff_no");
+  if (error) { $("list").innerHTML = esc(error.message); return; }
+  $("list").innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+  ${data.map((s) => `<tr data-id="${s.id}">
+    <td class="mono">${esc(displayId(s))}</td>
+    <td><input class="name" value="${esc(s.full_name)}" aria-label="Name"></td>
+    <td>${esc(s.email)}</td>
+    <td><select class="role" ${s.id === me.id ? "disabled" : ""}><option ${s.role === "AGENT" ? "selected" : ""}>AGENT</option><option ${s.role === "MANAGER" ? "selected" : ""}>MANAGER</option></select></td>
+    <td><select class="active" ${s.id === me.id ? "disabled" : ""}><option value="true" ${s.is_active ? "selected" : ""}>Active</option><option value="false" ${!s.is_active ? "selected" : ""}>Deactivated</option></select></td>
+    <td><button class="btn btn-ghost btn-sm save" type="button">Save</button></td></tr>`).join("")}</tbody></table></div>`;
+}
+$("list").addEventListener("click", async (e) => {
+  const b = e.target.closest(".save"); if (!b) return;
+  const tr = b.closest("tr");
+  b.disabled = true;
+  const r = await rpc("rpc_set_staff", { p_id: tr.dataset.id, p_role: tr.querySelector(".role").value, p_active: tr.querySelector(".active").value === "true", p_name: tr.querySelector(".name").value.trim() });
+  b.disabled = false;
+  if (r.ok) toast("Account updated."); else notice("#msg", "error", esc(r.message));
+});
+load();
+</script>
+</body>
+</html>

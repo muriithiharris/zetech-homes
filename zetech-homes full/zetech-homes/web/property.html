@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Property - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script src="config.js"></script>
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container section" id="main"></main>
+<div id="site-footer"></div>
+
+<script type="module">
+import { sb, publicChrome, badge, kes, esc, param, photoOrPlaceholder, imageUrl, loading, rpc, notice, startLiveStatus } from "./js/app.js";
+
+publicChrome("browse");
+const main = document.getElementById("main");
+const id = Number(param("id"));
+
+function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi" }).format(new Date()); }
+
+async function load() {
+  if (!sb) { main.innerHTML = '<div class="empty">Connect Supabase in <code>web/config.js</code>.</div>'; return; }
+  if (!id) { main.innerHTML = '<div class="empty">No property selected. <a href="index.html">Browse properties</a></div>'; return; }
+  main.innerHTML = loading();
+  const { data: p } = await sb.from("public_listings").select("*").eq("id", id).maybeSingle();
+  if (!p) { main.innerHTML = '<div class="empty"><h2>This property is no longer listed</h2><p><a href="index.html">Browse other homes</a></p></div>'; return; }
+  const { data: imgs } = await sb.from("public_property_images").select("*").eq("property_id", id).order("is_primary", { ascending: false }).order("id");
+  document.title = `${p.title} - Zetech Homes`;
+  render(p, imgs || []);
+}
+
+function render(p, imgs) {
+  const waitlist = p.status === "RESERVED";
+  const sold = p.status === "SOLD";
+  const main_img = imgs[0]?.path || p.image_path;
+  const thumbs = imgs.length > 1
+    ? `<div class="thumbs">${imgs.map((i, n) => `<img src="${esc(imageUrl(i.path))}" alt="Photo ${n + 1} of ${esc(p.title)}" data-full="${esc(imageUrl(i.path))}">`).join("")}</div>` : "";
+
+  main.innerHTML = `
+    <p class="small"><a href="index.html">&larr; All properties</a></p>
+    <div id="status-changed" class="notice changed hidden">The status of this property just changed. Refreshing&hellip;</div>
+    <div class="detail">
+      <div>
+        <div class="gallery-main" id="gallery">${photoOrPlaceholder(main_img, p.id, p.title)}</div>
+        ${thumbs}
+        <div class="panel" style="margin-top:1.4rem">
+          <h2>About this property</h2>
+          <p>${esc(p.description || "No description provided.").replace(/\n/g, "<br>")}</p>
+          <ul class="spec-list">
+            <li><span>Type</span>${esc(p.property_type)}</li>
+            <li><span>Bedrooms</span>${p.bedrooms ? p.bedrooms : "Studio"}</li>
+            <li><span>Bathrooms</span>${p.bathrooms}</li>
+            <li><span>Location</span>${esc(p.location)}</li>
+            <li><span>Area</span>${esc(p.sub_county)}, ${esc(p.county)}</li>
+            <li><span>LR number</span><span class="mono" style="display:inline;text-transform:none;letter-spacing:0;color:inherit;font-size:inherit">${esc(p.lr_number)}</span></li>
+          </ul>
+        </div>
+      </div>
+      <aside>
+        <div class="panel">
+          ${badge(p.status, `data-live-status data-lr="${esc(p.lr_number)}"`)}
+          <h1 style="font-size:1.6rem;margin-top:.6rem">${esc(p.title)}</h1>
+          <p class="detail-price">${kes(p.price)}</p>
+          <p class="muted small">Listed by ${esc(p.agent_first_name || "our team")}</p>
+        </div>
+        <div class="panel" id="request">${sold ? soldBox() : formBox(waitlist)}</div>
+      </aside>
+    </div>`;
+
+  document.getElementById("gallery")?.parentElement.querySelectorAll(".thumbs img").forEach((t) =>
+    t.addEventListener("click", () => { document.querySelector("#gallery img").src = t.dataset.full; }));
+  document.getElementById("viewing-form")?.addEventListener("submit", (e) => submit(e, p, waitlist));
+  const dateInput = document.getElementById("date");
+  if (dateInput) dateInput.min = today();
+}
+
+const soldBox = () => `<div class="notice sold">This property has been sold.</div><a class="btn btn-block" href="index.html">See other homes</a>`;
+
+function formBox(waitlist) {
+  return `
+    ${waitlist
+      ? `<div class="notice reserved">This property is currently reserved by another buyer. Join the waiting list and an agent will contact you if it becomes available again.</div><h2 style="font-size:1.2rem">Join the waiting list</h2>`
+      : `<h2 style="font-size:1.2rem">Request a viewing</h2><p class="muted small">An agent will contact you to confirm the time.</p>`}
+    <div id="form-msg"></div>
+    <form id="viewing-form" novalidate>
+      <div class="field"><label for="name">Your name</label><input id="name" autocomplete="name" required><div class="err" data-for="name"></div></div>
+      <div class="field"><label for="phone">Phone number</label><input id="phone" inputmode="tel" autocomplete="tel" placeholder="0712345678" required><div class="err" data-for="phone"></div></div>
+      <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" autocomplete="email"><div class="err" data-for="email"></div></div>
+      ${waitlist ? "" : `<div class="field"><label for="date">Preferred visit date</label><input id="date" type="date" required><div class="err" data-for="date"></div></div>`}
+      <div class="field"><label for="message">Message (optional)</label><textarea id="message" rows="3" maxlength="1000"></textarea></div>
+      <button class="btn btn-accent btn-block" type="submit" id="send">${waitlist ? "Join waiting list" : "Send viewing request"}</button>
+    </form>`;
+}
+
+async function submit(e, p, waitlist) {
+  e.preventDefault();
+  const v = (k) => document.getElementById(k)?.value.trim() ?? "";
+  document.querySelectorAll(".err").forEach((el) => (el.textContent = ""));
+  const err = (k, msg) => { const el = document.querySelector(`.err[data-for="${k}"]`); if (el) el.textContent = msg; return true; };
+  let bad = false;
+  if (v("name").length < 2) bad = err("name", "Please enter your name.");
+  if (!/^(\+254|0)[17][0-9]{8}$/.test(v("phone"))) bad = err("phone", "Enter a valid Kenyan phone number, e.g. 0712345678 or +254712345678.");
+  if (v("email") && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v("email"))) bad = err("email", "That email address does not look right.");
+  if (!waitlist && (!v("date") || v("date") < today())) bad = err("date", "Please choose a visit date from today onwards.");
+  if (bad) return;
+
+  const btn = document.getElementById("send"); btn.disabled = true;
+  const r = await rpc("rpc_submit_viewing_request", {
+    p_property_id: p.id, p_name: v("name"), p_phone: v("phone"), p_email: v("email"),
+    p_date: waitlist ? null : v("date"), p_message: v("message"),
+  });
+  btn.disabled = false;
+  if (r.ok) {
+    document.getElementById("request").innerHTML = `<div class="notice" style="background:var(--available-bg);color:#0f5a38">
+      <strong>Thank you!</strong> ${r.kind === "WAITLIST" ? "Your waiting-list inquiry was sent." : "Your viewing request was sent. An agent will contact you to confirm."}</div>
+      <a class="btn btn-ghost btn-block" href="index.html">Keep browsing</a>`;
+  } else {
+    notice("#form-msg", "error", esc(r.message));
+    if (r.code === "sold" || r.code === "not_found") load();
+  }
+}
+
+load().then(() => startLiveStatus({ onChange: () => {
+  document.getElementById("status-changed")?.classList.remove("hidden");
+  setTimeout(load, 1800);
+} }));
+</script>
+</body>
+</html>

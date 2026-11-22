@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Properties - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Properties</h1><a class="btn btn-accent" href="property-form.html">+ Add property</a></div>
+    <form class="filter-bar" id="filters" role="search">
+      <div><label for="q">LR, ID, title or place</label><input id="q" type="search" placeholder="LR/2026/00148 or PROP-00012"></div>
+      <div><label for="county">County</label><select id="county"></select></div>
+      <div><label for="type">Type</label><select id="type"></select></div>
+      <div><label for="status">Status</label><select id="status"><option value="">Any status</option><option value="AVAILABLE">Available</option><option value="RESERVED">Reserved</option><option value="SOLD">Sold</option></select></div>
+      <div><label for="min">Min price</label><input id="min" type="number" min="0"></div>
+      <div><label for="max">Max price</label><input id="max" type="number" min="0"></div>
+      <div>
+        <label style="text-transform:none;letter-spacing:0"><input type="checkbox" id="mine"> Mine only</label>
+        <button class="btn" type="submit" style="width:100%">Search</button>
+      </div>
+    </form>
+    <div id="msg"></div>
+    <div id="list"></div>
+    <div id="pager"></div>
+  </main>
+</div>
+
+<script type="module">
+import { sb, staffPage, staffMap, lookups, options, rpc, esc, kes, badge, propId, displayId, loading, notice, toast, paginationHtml, STATUS_LABEL } from "../js/app.js";
+
+const PAGE = 15;
+const state = { page: 1 };
+const $ = (id) => document.getElementById(id);
+const { me } = await staffPage({ active: "properties" });
+const [lk, staff] = await Promise.all([lookups(), staffMap()]);
+$("county").innerHTML = options(lk.counties, "", "Any county");
+$("type").innerHTML = options(lk.types, "", "Any type");
+const countyName = Object.fromEntries(lk.counties.map((c) => [c.id, c.name]));
+const typeName = Object.fromEntries(lk.types.map((t) => [t.id, t.name]));
+
+async function load() {
+  $("list").innerHTML = loading();
+  const from = (state.page - 1) * PAGE;
+  let q = sb.from("properties").select("*", { count: "exact" }).is("archived_at", null)
+    .order("created_at", { ascending: false }).range(from, from + PAGE - 1);
+
+  const term = $("q").value.trim().replace(/[,()%*]/g, " ").trim();
+  if (term) {
+    const m = term.match(/^PROP-?0*(\d+)$/i);
+    q = m ? q.eq("id", Number(m[1]))
+          : q.or(`lr_number.ilike.%${term.toUpperCase()}%,title.ilike.%${term}%,location.ilike.%${term}%`);
+  }
+  if ($("county").value) q = q.eq("county_id", $("county").value);
+  if ($("type").value) q = q.eq("property_type_id", $("type").value);
+  if ($("status").value) q = q.eq("status", $("status").value);
+  if ($("min").value) q = q.gte("price", $("min").value);
+  if ($("max").value) q = q.lte("price", $("max").value);
+  if ($("mine").checked) q = q.eq("agent_id", me.id);
+
+  const { data, count, error } = await q;
+  if (error) { $("list").innerHTML = `<div class="empty">Could not load: ${esc(error.message)}</div>`; return; }
+  if (!data.length) { $("list").innerHTML = '<div class="empty"><h3>No properties found</h3><p>Try different search terms, or <a href="property-form.html">add a property</a>.</p></div>'; $("pager").innerHTML = ""; return; }
+
+  $("list").innerHTML = `<div class="table-wrap"><table class="data">
+    <thead><tr><th>Property</th><th>LR number</th><th>County</th><th>Price (KES)</th><th>Status</th><th>Agent</th><th>Version</th><th>Actions</th></tr></thead>
+    <tbody>${data.map((p) => {
+      const own = me.role === "MANAGER" || p.agent_id === me.id;
+      return `<tr>
+        <td><strong>${esc(p.title)}</strong><br><span class="muted small">${propId(p.id)} &middot; ${esc(typeName[p.property_type_id] || "")}</span></td>
+        <td class="mono" style="white-space:nowrap">${esc(p.lr_number)}</td>
+        <td>${esc(countyName[p.county_id] || "")}</td>
+        <td style="white-space:nowrap">${Number(p.price).toLocaleString("en-KE", { maximumFractionDigits: 0 })}</td>
+        <td>${badge(p.status)}</td>
+        <td>${esc(staff[p.agent_id]?.full_name || "")}</td>
+        <td><span class="version-tag">v${p.version}</span></td>
+        <td>${own ? `<div class="actions">
+            <a class="btn btn-ghost btn-sm" href="status.html?id=${p.id}">Status</a>
+            <a class="btn btn-ghost btn-sm" href="property-form.html?id=${p.id}">Edit</a>
+            ${p.status !== "RESERVED" ? `<button class="btn btn-danger btn-sm" data-archive="${p.id}" data-version="${p.version}" data-lr="${esc(p.lr_number)}" type="button">Archive</button>` : ""}
+          </div>` : '<span class="muted small">View only</span>'}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>
+    <p class="muted small">${count} propert${count === 1 ? "y" : "ies"}</p>`;
+  $("pager").innerHTML = paginationHtml(state.page, PAGE, count || 0);
+}
+
+$("filters").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; load(); });
+["county", "type", "status", "mine"].forEach((id) => $(id).addEventListener("change", () => { state.page = 1; load(); }));
+$("pager").addEventListener("click", (e) => { const b = e.target.closest("[data-page]"); if (b && !b.disabled) { state.page = Number(b.dataset.page); load(); } });
+
+$("list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-archive]"); if (!b) return;
+  if (!confirm(`Archive ${b.dataset.lr}? It will disappear from the customer site but stay in the audit trail.`)) return;
+  b.disabled = true;
+  const r = await rpc("rpc_archive_property", { p_id: Number(b.dataset.archive), p_version: Number(b.dataset.version) });
+  if (r.ok) { toast("Listing archived."); load(); }
+  else { notice("#msg", "error", esc(r.message)); b.disabled = false; if (r.code === "conflict") load(); }
+});
+
+load();
+</script>
+</body>
+</html>

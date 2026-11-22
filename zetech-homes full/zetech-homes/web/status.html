@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check a listing - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script src="config.js"></script>
+</head>
+<body>
+<div id="site-header"></div>
+<main class="container section" style="max-width:720px" id="main">
+  <h1>Check a listing</h1>
+  <p class="muted">Enter the Land Reference (LR) number from an advert or a viewing invitation to see whether the property is still available.</p>
+  <form class="panel" id="check" role="search">
+    <div class="field" style="margin-bottom:.8rem">
+      <label for="lr">LR number</label>
+      <input id="lr" type="text" placeholder="LR/2026/00148" autocomplete="off">
+    </div>
+    <button class="btn" type="submit">Check status</button>
+  </form>
+  <div id="result" aria-live="polite"></div>
+</main>
+<div id="site-footer"></div>
+
+<script type="module">
+import { sb, publicChrome, badge, kes, esc, param, loading, startLiveStatus } from "./js/app.js";
+
+publicChrome("status");
+const out = document.getElementById("result");
+const input = document.getElementById("lr");
+
+async function check(raw) {
+  const lr = raw.replace(/\s+/g, "").toUpperCase();
+  if (!lr) return;
+  if (!sb) { out.innerHTML = '<div class="panel" style="margin-top:1.2rem">Connect Supabase in <code>web/config.js</code>.</div>'; return; }
+  out.innerHTML = loading("Checking...");
+  const { data: p } = await sb.from("public_listings").select("*").eq("lr_number", lr).maybeSingle();
+  if (!p) {
+    out.innerHTML = `<div class="panel" style="margin-top:1.2rem"><h2>No listing found</h2>
+      <p class="muted">We could not find <strong class="mono">${esc(lr)}</strong>. Check the number for typing mistakes, or contact the agent who gave it to you.</p></div>`;
+    return;
+  }
+  const action = p.status === "AVAILABLE"
+    ? `<p>Good news: this property is available for viewing.</p><a class="btn btn-accent" href="property.html?id=${p.id}#request">Schedule a visit</a>`
+    : p.status === "RESERVED"
+      ? `<div class="notice reserved">Reserved by another buyer. You can join the waiting list.</div><a class="btn btn-ghost" href="property.html?id=${p.id}">Join waiting list</a>`
+      : `<div class="notice sold">This property has been sold.</div><a class="btn btn-ghost" href="index.html">Browse other homes</a>`;
+  out.innerHTML = `<div class="panel" style="margin-top:1.2rem">
+    ${badge(p.status, `data-live-status data-lr="${esc(p.lr_number)}"`)}
+    <h2 style="margin-top:.6rem">${esc(p.title)}</h2>
+    <p class="muted">${esc(p.location)} &middot; ${esc(p.sub_county)}, ${esc(p.county)}<br><span class="mono">${esc(p.lr_number)}</span> &middot; ${kes(p.price)}</p>
+    ${action}</div>`;
+}
+
+document.getElementById("check").addEventListener("submit", (e) => {
+  e.preventDefault();
+  history.replaceState(null, "", "?lr=" + encodeURIComponent(input.value.trim()));
+  check(input.value);
+});
+if (param("lr")) { input.value = param("lr"); check(param("lr")); }
+startLiveStatus({ onChange: () => check(input.value) });
+</script>
+</body>
+</html>

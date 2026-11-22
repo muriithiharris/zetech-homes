@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zetech Homes - Find a home you can trust</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script src="config.js"></script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<section class="hero">
+  <div class="container">
+    <h1>Find a home you can trust.</h1>
+    <p>Every listing on Zetech Homes shows its live status. If a property is reserved or sold, you will see it before you spend a day travelling to view it.</p>
+    <form class="hero-search" id="search" role="search">
+      <div><label class="sr-only" for="q">Search</label><input id="q" type="search" placeholder="Location, title or LR number"></div>
+      <div><label class="sr-only" for="county">County</label><select id="county"></select></div>
+      <div><label class="sr-only" for="type">Type</label><select id="type"></select></div>
+      <button class="btn btn-accent" type="submit">Search homes</button>
+    </form>
+    <div class="hero-stats">
+      <div><strong id="stat-available">-</strong>homes available now</div>
+      <div><strong>Live</strong>status on every listing</div>
+      <div><strong>0</strong>duplicate listings allowed</div>
+    </div>
+  </div>
+</section>
+
+<main class="container section" id="main">
+  <div class="section-head">
+    <div>
+      <h2 id="results-title">Latest homes</h2>
+      <p class="muted" style="margin:0">Badges update automatically when an agent changes a listing.</p>
+    </div>
+    <div class="filter-inline" style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:end">
+      <div><label class="small muted" for="min">Min price (KES)</label><br><input id="min" type="number" min="0" step="100000" style="padding:.5rem;border:1.5px solid var(--line);border-radius:10px;width:9.5rem"></div>
+      <div><label class="small muted" for="max">Max price (KES)</label><br><input id="max" type="number" min="0" step="100000" style="padding:.5rem;border:1.5px solid var(--line);border-radius:10px;width:9.5rem"></div>
+      <button class="btn btn-ghost btn-sm" id="clear" type="button">Clear filters</button>
+    </div>
+  </div>
+  <div id="results" class="grid-cards" aria-live="polite"></div>
+  <div id="pager"></div>
+</main>
+
+<div id="site-footer"></div>
+
+<script type="module">
+import { sb, publicChrome, lookups, options, card, loading, notice, paginationHtml, startLiveStatus, esc } from "./js/app.js";
+
+publicChrome("browse");
+const PAGE = 12;
+const state = { page: 1 };
+const $ = (id) => document.getElementById(id);
+const results = $("results");
+
+async function init() {
+  if (!sb) { results.innerHTML = '<div class="empty" style="grid-column:1/-1">Connect Supabase in <code>web/config.js</code> to see listings.</div>'; return; }
+  const lk = await lookups();
+  $("county").innerHTML = options(lk.counties, "", "Any county");
+  $("type").innerHTML = options(lk.types, "", "Any type");
+  const params = new URLSearchParams(location.search);
+  if (params.get("q")) $("q").value = params.get("q");
+  await load();
+  startLiveStatus();
+}
+
+async function load() {
+  results.innerHTML = loading("Loading homes...");
+  const from = (state.page - 1) * PAGE;
+  let query = sb.from("public_listings").select("*", { count: "exact" })
+    .in("status", ["AVAILABLE", "RESERVED"])
+    .order("created_at", { ascending: false }).range(from, from + PAGE - 1);
+
+  const term = $("q").value.trim().replace(/[,()%*]/g, " ").trim();
+  if (term) query = query.or(`title.ilike.%${term}%,location.ilike.%${term}%,lr_number.ilike.%${term.toUpperCase()}%,sub_county.ilike.%${term}%,county.ilike.%${term}%`);
+  if ($("county").value) query = query.eq("county_id", $("county").value);
+  if ($("type").value) query = query.eq("property_type_id", $("type").value);
+  if ($("min").value) query = query.gte("price", $("min").value);
+  if ($("max").value) query = query.lte("price", $("max").value);
+
+  const { data, count, error } = await query;
+  if (error) { results.innerHTML = `<div class="empty" style="grid-column:1/-1">Could not load listings: ${esc(error.message)}</div>`; return; }
+  const filtered = term || $("county").value || $("type").value || $("min").value || $("max").value;
+  $("results-title").textContent = filtered ? `${count} propert${count === 1 ? "y" : "ies"} found` : "Latest homes";
+  results.innerHTML = data.length
+    ? data.map(card).join("")
+    : '<div class="empty" style="grid-column:1/-1"><h3>No properties match your search</h3><p>Try a wider price range or clear a filter.</p></div>';
+  $("pager").innerHTML = paginationHtml(state.page, PAGE, count || 0);
+  if (!filtered) $("stat-available").textContent = (await availableCount());
+}
+
+async function availableCount() {
+  const { count } = await sb.from("public_listings").select("id", { count: "exact", head: true }).eq("status", "AVAILABLE");
+  return count ?? "-";
+}
+
+$("search").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; load(); $("main").scrollIntoView({ behavior: "smooth" }); });
+["county", "type", "min", "max"].forEach((id) => $(id).addEventListener("change", () => { state.page = 1; load(); }));
+$("clear").addEventListener("click", () => { $("q").value = ""; $("county").value = ""; $("type").value = ""; $("min").value = ""; $("max").value = ""; state.page = 1; load(); });
+$("pager").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-page]"); if (!b || b.disabled) return;
+  state.page = Number(b.dataset.page); load(); $("main").scrollIntoView({ behavior: "smooth" });
+});
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audit log - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Audit log</h1>
+      <div style="display:flex;gap:.5rem"><button class="btn btn-ghost" id="csv" type="button">Export CSV</button><button class="btn btn-ghost" id="pdf" type="button">Export PDF</button></div></div>
+    <p class="muted">Append-only. Entries cannot be edited or deleted by anyone, including managers.</p>
+    <form class="filter-bar" id="filters">
+      <div><label for="user">User</label><select id="user"></select></div>
+      <div><label for="action">Action</label><select id="action"></select></div>
+      <div><label for="lr">LR number</label><input id="lr" placeholder="LR/2026/00148"></div>
+      <div><label for="from">From</label><input id="from" type="date"></div>
+      <div><label for="to">To</label><input id="to" type="date"></div>
+      <div><button class="btn" type="submit" style="width:100%">Apply</button></div>
+    </form>
+    <div id="list"></div><div id="pager"></div>
+  </main>
+</div>
+<script type="module">
+import { sb, staffPage, staffMap, esc, when, loading, displayId, paginationHtml, csvDownload, pdfDownload, ACTION_LABEL, param } from "../js/app.js";
+const $ = (id) => document.getElementById(id);
+const PAGE = 25, state = { page: 1 };
+const { me } = await staffPage({ active: "audit", manager: true });
+if (me.role !== "MANAGER") { $("main").innerHTML = '<div class="empty">Managers only.</div>'; throw new Error("forbidden"); }
+const staff = await staffMap();
+$("user").innerHTML = '<option value="">All users</option>' + Object.values(staff).map((s) => `<option value="${s.id}">${esc(s.full_name)}</option>`).join("");
+$("action").innerHTML = '<option value="">All actions</option>' + Object.entries(ACTION_LABEL).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+if (param("action")) $("action").value = param("action");
+
+function build(range) {
+  let q = sb.from("audit_log").select("*", { count: "exact" }).order("id", { ascending: false });
+  if ($("user").value) q = q.eq("user_id", $("user").value);
+  if ($("action").value) q = q.eq("action", $("action").value);
+  const lr = $("lr").value.replace(/\s+/g, "").toUpperCase();
+  if (lr) q = q.ilike("target_lr", `%${lr.replace(/[%,()]/g, "")}%`);
+  if ($("from").value) q = q.gte("created_at", $("from").value);
+  if ($("to").value) q = q.lt("created_at", new Date(new Date($("to").value).getTime() + 864e5).toISOString().slice(0, 10));
+  return range ? q.range(range[0], range[1]) : q;
+}
+const userOf = (a) => (a.user_id ? displayId(staff[a.user_id]) || "unknown" : "system");
+async function load() {
+  $("list").innerHTML = loading();
+  const { data, count, error } = await build([(state.page - 1) * PAGE, state.page * PAGE - 1]);
+  if (error) { $("list").innerHTML = `<div class="empty">${esc(error.message)}</div>`; return; }
+  $("list").innerHTML = data.length ? `<div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>Time</th><th>User</th><th>Action</th><th>LR</th><th>Old</th><th>New</th><th>IP</th></tr></thead><tbody>
+    ${data.map((a) => `<tr><td>${a.id}</td><td class="small" style="white-space:nowrap">${esc(when(a.created_at))}</td><td>${esc(userOf(a))}</td>
+      <td><span class="action-chip chip-${a.action}">${esc(ACTION_LABEL[a.action] || a.action)}</span></td>
+      <td class="mono">${esc(a.target_lr || "")}</td><td class="small">${esc(a.old_value || "")}</td><td class="small">${esc(a.new_value || "")}</td><td class="mono">${esc(a.ip_address || "")}</td></tr>`).join("")}
+    </tbody></table></div><p class="muted small">${count} entries</p>` : '<div class="empty">No entries match.</div>';
+  $("pager").innerHTML = paginationHtml(state.page, PAGE, count || 0);
+}
+async function exportRows() {
+  const { data } = await build([0, 4999]);
+  return (data || []).map((a) => [a.id, when(a.created_at), userOf(a), ACTION_LABEL[a.action] || a.action, a.target_lr || "", a.old_value || "", a.new_value || "", a.ip_address || ""]);
+}
+const H = ["#", "Time", "User", "Action", "LR", "Old", "New", "IP"];
+$("csv").onclick = async () => csvDownload("audit-log.csv", H, await exportRows());
+$("pdf").onclick = async () => pdfDownload("audit-log.pdf", "Zetech Homes - Audit log", H, await exportRows());
+$("filters").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; load(); });
+$("pager").addEventListener("click", (e) => { const b = e.target.closest("[data-page]"); if (b && !b.disabled) { state.page = Number(b.dataset.page); load(); } });
+load();
+</script>
+</body>
+</html>

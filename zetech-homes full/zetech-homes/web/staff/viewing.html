@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Viewing requests - Zetech Homes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../config.js"></script>
+</head>
+<body>
+<div class="topbar"><button type="button" data-sidebar-toggle aria-label="Menu">&#9776;</button><strong>Zetech Homes</strong><span></span></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Staff navigation"></aside>
+  <main class="main" id="main">
+    <div class="main-head"><h1>Viewing requests</h1>
+      <select id="show" aria-label="Filter"><option value="open">Open</option><option value="done">Handled</option><option value="all">All</option></select></div>
+    <div id="msg"></div><div id="list"></div>
+  </main>
+</div>
+<script type="module">
+import { sb, staffPage, rpc, esc, when, day, propId, loading, notice, toast } from "../js/app.js";
+const $ = (id) => document.getElementById(id);
+await staffPage({ active: "viewing" });
+
+async function load() {
+  $("list").innerHTML = loading();
+  let q = sb.from("viewing_requests").select("*").order("created_at", { ascending: false }).limit(100);
+  if ($("show").value === "open") q = q.eq("handled", false);
+  if ($("show").value === "done") q = q.eq("handled", true);
+  const { data, error } = await q;
+  if (error) { $("list").innerHTML = `<div class="empty">${esc(error.message)}</div>`; return; }
+  if (!data.length) { $("list").innerHTML = '<div class="empty"><h3>Nothing here</h3><p>No requests match this filter.</p></div>'; return; }
+  const ids = [...new Set(data.map((r) => r.property_id))];
+  const { data: props } = await sb.from("properties").select("id,lr_number,title").in("id", ids);
+  const pm = Object.fromEntries((props || []).map((p) => [p.id, p]));
+  $("list").innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Received</th><th>Property</th><th>Customer</th><th>Preferred date</th><th>Message</th><th></th></tr></thead><tbody>
+    ${data.map((r) => `<tr>
+      <td class="small">${esc(when(r.created_at))}</td>
+      <td><a href="status.html?id=${r.property_id}">${esc(pm[r.property_id]?.title || propId(r.property_id))}</a><br><span class="muted small mono">${esc(pm[r.property_id]?.lr_number || "")}</span></td>
+      <td>${esc(r.name || r.customer_name || "")}<br><span class="muted small">${esc(r.phone || r.customer_phone || "")} ${esc(r.email || r.customer_email || "")}</span></td>
+      <td>${r.preferred_date || r.viewing_date ? esc(day(r.preferred_date || r.viewing_date)) : '<span class="muted">Waiting list</span>'}</td>
+      <td class="small">${esc(r.message || "")}</td>
+      <td><button class="btn btn-ghost btn-sm" data-id="${r.id}" data-h="${!r.handled}" type="button">${r.handled ? "Reopen" : "Mark handled"}</button></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+$("show").addEventListener("change", load);
+$("list").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-id]"); if (!b) return;
+  b.disabled = true;
+  const r = await rpc("rpc_set_request_handled", { p_id: Number(b.dataset.id), p_handled: b.dataset.h === "true" });
+  if (r.ok) { toast("Updated."); load(); } else { notice("#msg", "error", esc(r.message)); b.disabled = false; }
+});
+load();
+</script>
+</body>
+</html>
